@@ -54,11 +54,12 @@ export default function App() {
     const [bankroll, setBankroll] = useState(600);
     const [initialBankroll, setInitialBankroll] = useState(null);
     const [bankrollInput, setBankrollInput] = useState('600');
-    
+    const [shooterStartBankroll, setShooterStartBankroll] = useState(0);
+
     // P/L State
     const [pointWinnings, setPointWinnings] = useState(0);
-    const [shooterWinnings, setShooterWinnings] = useState(0);
-
+    const [pointHistory, setPointHistory] = useState([]);
+    const [copyButtonText, setCopyButtonText] = useState('Copy Log');
 
     // --- Memoized Calculations ---
     const totalBet = useMemo(() => Object.values(bets).reduce((sum, bet) => sum + Number(bet), 0), [bets]);
@@ -69,16 +70,13 @@ export default function App() {
     }, [bankroll, initialBankroll]);
 
     const pointPL = useMemo(() => {
-        if (point === null) return 0;
         return pointWinnings;
-    }, [pointWinnings, point]);
+    }, [pointWinnings]);
 
-    const shooterNetPL = useMemo(() => {
-        if (initialBets === null && initialBankroll !== null) {
-            return shooterWinnings;
-        }
-        return shooterWinnings - totalBet;
-    }, [shooterWinnings, totalBet, initialBets, initialBankroll]);
+    const shooterPL = useMemo(() => {
+        if (initialBankroll === null) return 0; // Don't calculate until session starts
+        return bankroll + totalBet - shooterStartBankroll;
+    }, [bankroll, totalBet, shooterStartBankroll, initialBankroll]);
 
 
     // --- Core Game Logic ---
@@ -126,34 +124,45 @@ export default function App() {
         setBets({ 4: 0, 5: 0, 6: 0, 8: 0, 9: 0, 10: 0 });
     };
 
+    const placeBetsOnTable = (betsToPlace, currentBankroll) => {
+        const totalPlacedBet = Object.values(betsToPlace).reduce((s, b) => s + b, 0);
+        setBets(betsToPlace);
+        const newBankroll = currentBankroll - totalPlacedBet;
+        setBankroll(newBankroll);
+        setShooterStartBankroll(newBankroll + totalPlacedBet); // Snapshot bankroll before this bet
+    
+        const newTracker = {};
+        Object.keys(betsToPlace).forEach(num => {
+            if (betsToPlace[num] > 0) newTracker[num] = 'collect';
+        });
+        setStrategyTracker(newTracker);
+        addMessage(`Placing $${totalPlacedBet.toFixed(2)}. Bets are ON.`, 'info');
+    };
+
     const handleSetInitialBets = () => {
         const betsToPlace = { ...bets };
+        let currentBankroll = bankroll;
         
         if (initialBankroll === null) {
             const startingBankroll = Number(bankrollInput) || 600;
             setInitialBankroll(startingBankroll);
             setBankroll(startingBankroll);
+            currentBankroll = startingBankroll;
+            setShooterStartBankroll(startingBankroll);
             addMessage(`Starting bankroll set to $${startingBankroll.toFixed(2)}.`, "info");
+        } else {
+             setShooterStartBankroll(bankroll); // New shooter starts, snapshot current bankroll
         }
         
         setInitialBets(betsToPlace);
         setBets({ 4: 0, 5: 0, 6: 0, 8: 0, 9: 0, 10: 0 });
-        setShooterWinnings(0);
+        setPointHistory([]);
         
         addMessage(`Bets of $${Object.values(betsToPlace).reduce((s, b) => s + b, 0).toFixed(2)} are ready.`, "info");
         
         if (point) {
              addMessage(`Point is ON: ${point}. Placing bets now.`, "info");
-             const totalPlacedBet = Object.values(betsToPlace).reduce((s,b) => s+b, 0);
-             setBankroll(prev => prev - totalPlacedBet);
-             setBets(betsToPlace);
-             
-             const newTracker = {};
-             Object.keys(betsToPlace).forEach(num => {
-                 if (betsToPlace[num] > 0) newTracker[num] = 'collect';
-             });
-             setStrategyTracker(newTracker);
-
+             placeBetsOnTable(betsToPlace, currentBankroll);
         } else {
             addMessage(`Waiting for a point to be established.`, "info");
         }
@@ -172,11 +181,30 @@ export default function App() {
         setInitialBankroll(null);
         setBankrollInput('600');
         setPointWinnings(0);
-        setShooterWinnings(0);
+        setPointHistory([]);
+        setShooterStartBankroll(0);
     };
 
     const addMessage = (text, type) => {
         setMessages(prev => [{ text, type, timestamp: new Date().toLocaleTimeString() }, ...prev]);
+    };
+
+    const handleCopyLog = () => {
+        const logText = [...messages].reverse().map(msg => `${msg.timestamp} ${msg.text}`).join('\n');
+        
+        // Use a temporary textarea to copy to clipboard
+        const textArea = document.createElement("textarea");
+        textArea.value = logText;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            setCopyButtonText('Copied!');
+            setTimeout(() => setCopyButtonText('Copy Log'), 1500);
+        } catch (err) {
+            console.error('Failed to copy log: ', err);
+        }
+        document.body.removeChild(textArea);
     };
 
     const handleRoll = (rollValue) => {
@@ -186,17 +214,7 @@ export default function App() {
         if (!point) {
             if ([4, 5, 6, 8, 9, 10].includes(rollValue)) {
                 if (totalBet === 0 && initialBets) {
-                    const betsToPlace = initialBets;
-                    const totalPlacedBet = Object.values(betsToPlace).reduce((s, b) => s + b, 0);
-                    setBets(betsToPlace);
-                    setBankroll(prev => prev - totalPlacedBet);
-
-                    const newTracker = {};
-                    Object.keys(betsToPlace).forEach(num => {
-                        if (betsToPlace[num] > 0) newTracker[num] = 'collect';
-                    });
-                    setStrategyTracker(newTracker);
-                    addMessage(`Placing $${totalPlacedBet.toFixed(2)}. Bets are ON.`, 'info');
+                    placeBetsOnTable(initialBets, bankroll);
                 }
                 setPoint(rollValue);
                 addMessage(`Point is set to ${rollValue}.`, 'info');
@@ -206,77 +224,54 @@ export default function App() {
             return;
         }
 
-        // --- POINT IS ON LOGIC ---
-        if (rollValue === 7) {
-            const lostAmount = totalBet;
-            const finalShooterPL = shooterWinnings - lostAmount;
+        const handleHit = (isPointHit = false) => {
+            const hitNumber = isPointHit ? point : rollValue;
+            const betAmount = bets[hitNumber];
 
-            addMessage(`Seven out. Lost $${lostAmount.toFixed(2)}.`, 'loss');
-            addMessage(`Final P/L for this shooter: $${finalShooterPL.toFixed(2)}`, 'info');
-            
-            setShooterWinnings(finalShooterPL);
-            setPoint(null);
-            setPointWinnings(0);
-            setBets({ 4: 0, 5: 0, 6: 0, 8: 0, 9: 0, 10: 0 });
-            setStrategyTracker({});
-            setInitialBets(null);
-            
-            addMessage(`New shooter. Please place your bets and click "Lock In Bets".`, 'info');
-            return;
-        }
-
-        if (rollValue === point) {
-            setPoint(null);
-            setPointWinnings(0);
-            
-            addMessage(`Point ${rollValue} hit! Winner!`, 'win');
-            addMessage(`Bets remain ON for the new come-out roll.`, 'info');
-            return;
-        }
-
-        if (bets[rollValue] > 0) {
-            const betAmount = bets[rollValue];
-            const betType = betTypes[rollValue];
-            let payout = 0;
-
-            if (betType === 'place') {
-                payout = betAmount * PLACE_PAYOUTS[rollValue];
-            } else { // buy
-                payout = betAmount * BUY_PAYOUTS[rollValue];
-                payout -= betAmount * 0.05; // 5% vig
-            }
-            
-            setPointWinnings(prev => prev + payout);
-            setShooterWinnings(prev => prev + payout);
-            
-            const action = strategyTracker[rollValue];
-            if (!action) {
-                addMessage(`Error: No strategy found for bet on ${rollValue}. Defaulting to COLLECT.`, 'loss');
-                setBankroll(prev => prev + payout);
+            if (betAmount <= 0) {
+                 if(isPointHit){
+                    setPointHistory(prev => [...prev, { point: hitNumber, profit: pointWinnings }]);
+                    setPoint(null);
+                    setPointWinnings(0);
+                    addMessage(`Point ${hitNumber} hit! Winner! Bets remain ON for the new come-out roll.`, 'win');
+                 }
                 return;
             }
 
-            addMessage(`Hit on ${rollValue}! Bet was $${betAmount.toFixed(2)}. Action: ${action.toUpperCase()}.`, 'win');
+            const betType = betTypes[hitNumber];
+            let payout = 0;
 
-            if (action === 'collect') {
+            if (betType === 'place') {
+                payout = betAmount * PLACE_PAYOUTS[hitNumber];
+            } else { // buy
+                payout = betAmount * BUY_PAYOUTS[hitNumber];
+                payout -= betAmount * 0.05; // 5% vig
+            }
+            
+            let netProfit = payout;
+            const action = strategyTracker[hitNumber];
+
+            addMessage(`Hit on ${hitNumber}! Bet was $${betAmount.toFixed(2)}. Action: ${action.toUpperCase()}.`, 'win');
+             if (action === 'collect') {
                 setBankroll(prev => prev + payout);
-                setStrategyTracker(prev => ({ ...prev, [rollValue]: 'press' }));
-                addMessage(`Collected $${payout.toFixed(2)}. Next action for ${rollValue} is PRESS.`, 'info');
+                setStrategyTracker(prev => ({ ...prev, [hitNumber]: 'press' }));
+                addMessage(`Collected $${payout.toFixed(2)}. Next action for ${hitNumber} is PRESS.`, 'info');
             } else { // 'press'
                 const maxBetLimit = Number(maxBet);
                 const newBetAmount = betAmount * 2;
 
                 if (maxBetLimit > 0 && betAmount >= maxBetLimit) {
                     setBankroll(prev => prev + payout);
-                    setStrategyTracker(prev => ({...prev, [rollValue]: 'collect'}));
+                    setStrategyTracker(prev => ({...prev, [hitNumber]: 'collect'}));
                     addMessage(`Bet at max limit. Collecting $${payout.toFixed(2)}.`, 'info');
                 } else if (maxBetLimit > 0 && newBetAmount > maxBetLimit) {
                     const costToReachMax = maxBetLimit - betAmount;
                     if (payout >= costToReachMax) {
                         const leftover = payout - costToReachMax;
-                        setBets(prev => ({ ...prev, [rollValue]: maxBetLimit }));
+                        netProfit = leftover;
+                        setBets(prev => ({ ...prev, [hitNumber]: maxBetLimit }));
                         setBankroll(prev => prev + leftover); 
-                        setStrategyTracker(prev => ({ ...prev, [rollValue]: 'collect' }));
+                        setStrategyTracker(prev => ({ ...prev, [hitNumber]: 'collect' }));
                         addMessage(`Pressed bet to max of $${maxBetLimit.toFixed(2)}. Collected $${leftover.toFixed(2)} change.`, 'info');
                     } else {
                         setBankroll(prev => prev + payout);
@@ -285,16 +280,53 @@ export default function App() {
                 } else {
                     const costToPress = betAmount;
                     const leftover = payout - costToPress;
-                    setBets(prev => ({ ...prev, [rollValue]: newBetAmount }));
+                    netProfit = leftover;
+                    setBets(prev => ({ ...prev, [hitNumber]: newBetAmount }));
                     setBankroll(prev => prev + leftover);
-                    setStrategyTracker(prev => ({ ...prev, [rollValue]: 'collect' }));
+                    setStrategyTracker(prev => ({ ...prev, [hitNumber]: 'collect' }));
 
-                    let pressMessage = `Pressed bet on ${rollValue} to $${newBetAmount.toFixed(2)}.`;
+                    let pressMessage = `Pressed bet on ${hitNumber} to $${newBetAmount.toFixed(2)}.`;
                     pressMessage += ` Collected $${leftover.toFixed(2)} change.`;
-                    pressMessage += ` Next action for ${rollValue} is COLLECT.`;
+                    pressMessage += ` Next action for ${hitNumber} is COLLECT.`;
                     addMessage(pressMessage, 'info');
                 }
             }
+            
+            const finalPointWinnings = pointWinnings + netProfit;
+
+            if(isPointHit){
+                setPointHistory(prev => [...prev, { point: hitNumber, profit: finalPointWinnings }]);
+                setPoint(null);
+                setPointWinnings(0);
+                addMessage(`Point ${hitNumber} hit! Winner! Bets remain ON for the new come-out roll.`, 'win');
+            } else {
+                setPointWinnings(finalPointWinnings);
+            }
+        };
+
+        // --- POINT IS ON LOGIC ---
+        if (rollValue === 7) {
+            const lostAmount = totalBet;
+            const finalShooterPL = bankroll - shooterStartBankroll;
+
+            addMessage(`Seven out. Lost $${lostAmount.toFixed(2)}.`, 'loss');
+            addMessage(`Final P/L for this shooter: ${finalShooterPL >= 0 ? `$${finalShooterPL.toFixed(2)}` : `-$${Math.abs(finalShooterPL).toFixed(2)}`}`, 'info');
+            
+            setPoint(null);
+            setPointWinnings(0);
+            setBets({ 4: 0, 5: 0, 6: 0, 8: 0, 9: 0, 10: 0 });
+            setStrategyTracker({});
+            setInitialBets(null);
+            setPointHistory([]);
+            
+            addMessage(`New shooter. Please place your bets and click "Lock In Bets".`, 'info');
+            return;
+        }
+
+        if (rollValue === point) {
+            handleHit(true);
+        } else {
+            handleHit(false);
         }
     };
 
@@ -516,7 +548,7 @@ export default function App() {
                                     </div>
                                 </div>
                                 <div className="bg-gray-700 p-2 rounded-lg">
-                                    <div className="text-xs text-gray-400">Point P/L</div>
+                                    <div className="text-xs text-gray-400">Point Winnings</div>
                                     <div className={`text-lg font-bold ${pointPL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                          {`$${pointPL.toFixed(2)}`}
                                     </div>
@@ -524,8 +556,8 @@ export default function App() {
                             </div>
                             <div className="bg-gray-700 p-2 rounded-lg">
                                 <div className="text-xs text-gray-400">Shooter P/L</div>
-                                <div className={`text-lg font-bold ${shooterNetPL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                     {shooterNetPL >= 0 ? `$${shooterNetPL.toFixed(2)}` : `-$${Math.abs(shooterNetPL).toFixed(2)}`}
+                                <div className={`text-lg font-bold ${shooterPL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                     {shooterPL >= 0 ? `$${shooterPL.toFixed(2)}` : `-$${Math.abs(shooterPL).toFixed(2)}`}
                                 </div>
                             </div>
                         </div>
@@ -536,6 +568,22 @@ export default function App() {
                                 {point || 'OFF'}
                             </div>
                         </div>
+
+                        {pointHistory.length > 0 && (
+                             <div className="space-y-2">
+                                <h3 className="text-lg font-semibold text-center">Points Made</h3>
+                                <div className="flex flex-wrap gap-2 justify-center bg-gray-700 p-3 rounded-lg">
+                                    {pointHistory.map((p, i) => (
+                                        <div key={i} className="flex items-center gap-2 bg-gray-900 px-3 py-1 rounded-full text-sm">
+                                            <span className="font-bold text-white">{p.point}</span>
+                                            <span className={`font-semibold ${p.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                {p.profit >= 0 ? `+$${p.profit.toFixed(2)}` : `-$${Math.abs(p.profit).toFixed(2)}`}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                             </div>
+                        )}
 
                         {initialBankroll !== null && (
                              <div className="space-y-4 text-center">
@@ -566,7 +614,12 @@ export default function App() {
                         )}
 
                         <div>
-                            <h3 className="text-lg font-semibold mb-2">Log</h3>
+                            <div className="flex justify-between items-center mb-2">
+                                <h3 className="text-lg font-semibold">Log</h3>
+                                <button onClick={handleCopyLog} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-1 px-2 rounded-md transition-colors">
+                                    {copyButtonText}
+                                </button>
+                            </div>
                             <div className="h-64 bg-gray-900 rounded-lg p-3 overflow-y-auto flex flex-col-reverse border border-gray-700">
                                 {messages.length === 0 ? (
                                     <div className="text-center text-gray-500 h-full flex items-center justify-center">
@@ -595,5 +648,3 @@ export default function App() {
         </div>
     );
 }
-
-
