@@ -1,9 +1,17 @@
-# Stage 1: Build the React application
+# Stage 1: Clone the repository and build the React application
 FROM node:18-alpine AS build
+
+# Install git
+RUN apk add --no-cache git
+
+# Clone your repository from GitHub
+# IMPORTANT: Replace this URL with your actual repository URL
+RUN git clone https://github.com/your-username/craps-tracker-app.git /app
+
 WORKDIR /app
-COPY package.json ./
+
+# Install dependencies and build the application
 RUN npm install
-COPY . ./
 RUN npm run build
 
 # Stage 2: Serve the application using a lightweight web server
